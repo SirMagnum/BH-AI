@@ -1,88 +1,115 @@
-# Privacy Assistant - BH-AI
+# BH-AI — Contextual Desktop Companion
 
-A local, privacy-focused desktop assistant that captures a user-selected screen region, runs OCR, understands context, and draws a click-through overlay — all without sending data off-device.
+A privacy-first desktop assistant that watches your screen only while a
+session is active, remembers the whole work session, and can point at
+your screen to teach you. See `../PROJECT_CONTEXT.md` and
+`../contextual-desktop-companion-roadmap.md` (v2.0) for the full plan —
+this file covers only what's runnable today.
 
----
-
-## Features
-
-| Feature | Details |
-|---|---|
-| 🖥️ Screen region capture | Drag-to-select any area; `mss` grabs frames at 0.2–3 FPS |
-| 🔍 OCR | `pytesseract` extracts text from each frame |
-| 🧠 Context analysis | Keyword rules detect login pages, search UIs, forms, checkout, errors, etc. |
-| 🎙️ Voice feedback | `pyttsx3` speaks the top insight (toggle on/off) |
-| 🪟 Overlay | Transparent, always-on-top, click-through window highlights the monitored region |
-| ⏯️ Session control | Start / Pause (halts capture) / Stop |
-| 📋 Live OCR log | Timestamped text output with scroll view |
+**Windows is the graded deliverable; macOS is a development target.**
+See `PROJECT_CONTEXT.md §6a`. Everything below runs on both.
 
 ---
+
+## Status
+
+**Phase 1 done.** Session state machine, worker supervisor, event bus,
+SQLite store, and a Qt shell (dashboard + pill HUD + tray).
+
+**Phase 2 in progress.** Real capture is live: a `CaptureSource`
+interface with an `mss` backend, an **allowlist** applied inside the
+capture worker before anything else can see a frame — the AI sees
+NOTHING by default, only the areas you've explicitly marked watchable —
+dHash-based change scoring with adaptive backoff, a shared-memory ring
+buffer, a **"See what the AI sees" trust inspector**, and a **watch-area
+editor** — drag on a live preview to mark an area visible; it's saved
+immediately and a real session actually applies it. Regions are also
+fail-closed on resolution change: they're scoped to the exact monitor
+size they were drawn for, and the capture worker stops itself (rather
+than guessing)
+if the screen's resolution changes mid-session. Not yet built: the
+sensitive-window denylist and the `dxcam`/WGC Windows backend (needs the
+Windows machine). No perception, memory, or LLM yet — Phases 3–5.
+
+A `src/` prototype (tkinter, Windows-only) still exists for comparison —
+see `docs/adr/0009-python-qt-stack.md` for why it was migrated off.
 
 ## Setup
 
-### 1. Install Tesseract OCR (required for OCR)
-
-Download the Windows installer from:
-https://github.com/UB-Mannheim/tesseract/wiki
-
-> Default install path: `C:\Program Files\Tesseract-OCR\tesseract.exe`
-> Add it to your **System PATH**.
-
-### 2. Install Python dependencies
-
-```powershell
-cd C:\Users\sir_m\Projects\BH-AI
-pip install -r requirements.txt
+```bash
+cd BH-AI
+python3 -m venv .venv
+source .venv/bin/activate          # .venv\Scripts\activate on Windows
+pip install -e ".[dev]"
 ```
 
-### 3. Run the application
+## Run
 
-```powershell
-python main.py
+```bash
+python main.py                     # the Phase 1+ app (PySide6)
+python main.py --legacy            # the original tkinter prototype (Windows only)
+python main.py --legacy --user     # legacy prototype's pill-HUD mode
 ```
 
----
+The app opens a dev dashboard, a floating pill HUD, and a tray icon.
+Start/Pause/Resume/End drive a real session state machine; the event log
+panel shows every bus event live. There is no real screen capture yet —
+the capture worker is a Phase 1 stub whose only job is to prove the
+**process lifecycle** is correct (it exists exactly while the session is
+`ACTIVE`, and Task Manager / Activity Monitor will show its PID appear
+and disappear on Start/Pause).
 
-## Usage
+## Test
 
-1. Click **⊡ Select Region** — drag on the screen to pick the area to monitor
-2. Click **▶ Start Session** — capture begins, OCR runs, overlay appears
-3. Watch the **Context Insights** panel update in real time
-4. Click **⏸ Pause** — capture stops immediately, session state preserved
-5. Click **▶ Resume** to continue, or **⏹ Stop** to end
-
-### Overlay
-
-The dashed coloured border appears around your monitored region:
-- 🟦 Cyan = search interface
-- 🟨 Amber = form
-- 🔴 Red/Pink = login / password
-- 🟥 Red = error page
-- 🟩 Green = generic
-
-The overlay is **click-through** — normal mouse interaction works underneath.
-
----
-
-## Architecture
-
-```
-main.py                  Entry point
-src/
-  capture.py             mss-based screen capture (threaded)
-  ocr.py                 pytesseract OCR wrapper
-  analyzer.py            Keyword-based context rules → Insight objects
-  voice.py               pyttsx3 TTS (non-blocking queue)
-  overlay.py             Transparent tkinter overlay window
-  region_selector.py     Full-screen drag-to-select UI
-  ui.py                  Main control panel (tkinter)
+```bash
+pytest                             # 90 tests
+ruff check bhai tests
 ```
 
----
+Two tests to read first if you want to understand the privacy guarantee:
+- `tests/test_supervisor_and_manager.py::test_pause_kills_the_capture_process_at_the_os_level`
+  — starts a session, records the capture worker's real PID, calls
+  `pause()`, and asserts via `psutil` that the OS agrees the process is
+  dead. Not "we think it's paused" — the PID is gone.
+- `tests/test_capture_integration.py::test_full_screen_blocked_region_makes_every_frame_all_black`
+  — the adversarial redaction test, end to end: blocks the entire
+  monitor, captures a **real** screenshot through the real IPC boundary,
+  and asserts every byte that reaches the other side is black.
 
-## Privacy Notes
+## Layout
 
-- **No network calls.** All processing is local.
-- Screen frames are held only in RAM; never written to disk.
-- OCR text is displayed in-app only; not logged to any file.
-- Closing the window immediately stops all capture.
+```
+bhai/
+  session/      state machine (states.py), SessionManager, WorkerSupervisor
+  workers/      capture_worker.py (real pipeline), compute_worker.py (inert until Phase 3)
+  capture/      watch_regions.py (allowlist), change.py (dHash), trigger.py (adaptive backoff), ring.py (shared memory)
+  bus/          typed events (Pydantic), asyncio pub/sub, the one Qt bridge
+  db/           SQLite schema v1 + SessionStore (WAL, atomic session delete)
+  platform/     interfaces.py (CaptureSource) + portable/capture_mss.py; windows/macos empty until dxcam/AX land
+  ui/           dashboard, pill HUD, tray, trust inspector, shared theme
+tests/          FSM properties, OS-level lifecycle, capture pipeline + integration, platform-isolation lint
+spikes/         Phase 0 feasibility spikes with written verdicts
+docs/adr/       Architecture Decision Records
+src/            legacy tkinter prototype — reference only, not the trunk
+```
+
+## Privacy notes (current, honest state)
+
+- No network calls anywhere in this codebase yet.
+- Real screen capture is live via `mss`. What survives is an
+  **allowlist, not a denylist**: the AI sees nothing at all unless a
+  watch area has been explicitly drawn — with zero configuration, every
+  frame comes back fully black. This is applied **inside the capture
+  worker process**, before the frame is written to shared memory and
+  before anything else — including the trust inspector — can see it.
+  `apply_watch_regions()` (`bhai/capture/watch_regions.py`) is the one
+  function in this codebase every teammate should be able to read end to
+  end in one pass.
+- Watch areas are drawn via the editor (tray → "What can the AI
+  watch?…"), saved the moment you release the drag, and scoped to the
+  exact monitor resolution they were drawn for — they never silently
+  apply to a different resolution. If the screen's resolution changes
+  mid-session, the capture worker stops itself (fail-closed) rather than
+  keep capturing against a mismatched region set.
+- Ending a session without saving deletes every row for that session in
+  one transaction — verified by test, not asserted in a doc.

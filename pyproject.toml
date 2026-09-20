@@ -1,0 +1,65 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bhai"
+version = "0.1.0"
+description = "Contextual Desktop Companion — privacy-first desktop assistant"
+requires-python = ">=3.11"
+dependencies = [
+    "PySide6>=6.7",
+    "qasync>=0.27",
+    "pydantic>=2.7",
+    "structlog>=24.1",
+    "mss>=9.0",
+    "Pillow>=10.4",
+    "psutil>=6.0",
+    "numpy>=1.26",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-qt>=4.4",
+    "pytest-asyncio>=0.23",
+    "hypothesis>=6.100",
+    "ruff>=0.6",
+]
+
+[tool.setuptools]
+# Explicit, not `packages.find`: setuptools itself warns that
+# `packages.find.include/exclude` "may have no effect" for editable
+# installs once more than one top-level directory looks package-like
+# (tests/, src/ — namespace-package auto-detection picks them up even
+# without __init__.py). An explicit list is the only reliable way to
+# keep `pip install -e .` from also exposing tests/ and src/ as if they
+# were part of the shipped library. Add a line here when you add a new
+# bhai subpackage — forgetting shows up immediately as an ImportError,
+# so it's a loud failure, not a silent one.
+packages = [
+    "bhai",
+    "bhai.bus",
+    "bhai.capture",
+    "bhai.db",
+    "bhai.platform",
+    "bhai.platform.macos",
+    "bhai.platform.portable",
+    "bhai.platform.windows",
+    "bhai.session",
+    "bhai.ui",
+    "bhai.ui.widgets",
+    "bhai.workers",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.pytest.ini_options]
+qt_api = "pyside6"
+asyncio_mode = "auto"
+testpaths = ["tests"]

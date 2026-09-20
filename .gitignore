@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Local config & secrets — never commit provider keys
+.env
+.env.*
+!.env.example
+
+# Runtime data (sessions are ephemeral by design; nothing here belongs in git)
+*.db
+*.db-wal
+*.db-shm
+logs/
+models/
+captures/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/
+.idea/

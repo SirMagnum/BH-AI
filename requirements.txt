@@ -1,5 +1,16 @@
-mss==9.0.2
-Pillow==10.4.0
+# Primary stack (bhai/) — see pyproject.toml for the authoritative list
+# and `pip install -e .[dev]` for development. This file is kept for
+# anyone who just wants `pip install -r requirements.txt` to work.
+PySide6>=6.7
+qasync>=0.27
+pydantic>=2.7
+structlog>=24.1
+mss>=9.0
+Pillow>=10.4
+psutil>=6.0
+
+# Legacy prototype (src/, launched via `python main.py --legacy`) —
+# Windows-only; kept for comparison, not part of the graded build.
 pytesseract==0.3.13
 pyttsx3==2.98
-pywin32==307
+pywin32==307 ; sys_platform == "win32"

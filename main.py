@@ -1,33 +1,44 @@
 """
 BH-AI — Entry Point
+
 Usage:
-  python main.py           → Dev Mode (full debug dashboard)
-  python main.py --user    → User Mode (compact floating pill HUD)
-  python main.py --dev     → Dev Mode (explicit)
+  python main.py             → the Phase 1+ app (PySide6, this is the trunk)
+  python main.py --legacy    → the original tkinter prototype (src/), kept
+                                for comparison only — see roadmap §1 for why
+                                it was migrated off.
+
+Everything runs inside `if __name__ == "__main__":`. This is not style —
+it is required. On macOS/Windows, `multiprocessing`'s spawn start method
+re-executes this entire file inside every worker child process (as
+`__mp_main__`, to reconstruct the parent's module state). Without the
+guard, every capture-worker spawn would recursively try to build a whole
+second app inside the child, which is exactly the
+"An attempt has been made to start a new process before the current
+process has finished its bootstrapping phase" crash. See roadmap Phase 1
+"possible blockers" — this is the same trap, just previously only fixed
+in the throwaway smoke-test scripts and not here.
 """
 
 import sys
-import os
-
-sys.path.insert(0, os.path.dirname(__file__))
 
 
-def main():
-    mode = "dev"
-    if "--user" in sys.argv:
-        mode = "user"
-    elif "--dev" in sys.argv:
-        mode = "dev"
+def _run() -> None:
+    if "--legacy" in sys.argv:
+        sys.argv.remove("--legacy")
+        mode = "user" if "--user" in sys.argv else "dev"
+        if mode == "user":
+            from src.ui_user import UserModeUI
 
-    if mode == "user":
-        from src.ui_user import UserModeUI
-        app = UserModeUI()
+            UserModeUI().run()
+        else:
+            from src.ui import AssistantUI
+
+            AssistantUI().run()
     else:
-        from src.ui import AssistantUI
-        app = AssistantUI()
+        from bhai.ui.app import main
 
-    app.run()
+        sys.exit(main())
 
 
 if __name__ == "__main__":
-    main()
+    _run()
