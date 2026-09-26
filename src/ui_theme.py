@@ -1,48 +1,115 @@
 """
 BH-AI — Shared Theme and Custom Widgets
-Provides a minimalist pastel color palette, modern typography,
-and custom rounded widgets for Tkinter.
+Minimalist Slate / Graphite industrial palette (strictly zero purple tint),
+modern typography, rounded styling, and CustomTkinter fallback shims.
 """
 
+import math
+import sys
 import tkinter as tk
+from tkinter import ttk
 
 # ────────────────────────────── Colors ──────────────────────────────
-# Soft, deep blue-grey minimalist theme with pastel accents.
+# Clean minimalist slate & graphite palette
 
 C = {
-    # Backgrounds
-    "bg":          "#1E1E2E",  # Base deep blue-grey
-    "surface":     "#181825",  # Slightly darker panels
-    "panel":       "#11111B",  # Deepest background for contrast
-    "border":      "#313244",  # Soft border lines
+    # Surfaces & Canvas
+    "bg":          "#0D0E11",  # Deep obsidian black
+    "surface":     "#16181D",  # Clean slate grey container
+    "panel":       "#1C1F26",  # Elevated panel fill
+    "panel_alt":   "#232730",  # Card / input fields
+    "border":      "#2B303C",  # Subdued edge stroke
+    "border_focus":"#404756",  # Highlighted edge
 
-    # Pastel Accents
-    "accent":      "#89B4FA",  # Pastel Blue
-    "accent_hov":  "#B4BEFE",  # Lighter Blue for hover
-    "success":     "#A6E3A1",  # Pastel Green
-    "warning":     "#F9E2AF",  # Pastel Yellow
-    "danger":      "#F38BA8",  # Pastel Red
-    "dev":         "#FAB387",  # Pastel Peach (Dev badge)
+    # Monochromatic Accents (Cool Slate / Arctic White)
+    "accent":      "#38BDF8",  # Crisp Sky / Cyan accent
+    "accent_hov":  "#7DD3FC",  # Light cyan hover
+    "accent_dim":  "#1E3A5F",  # Dimmed accent for backgrounds
+    "dev":         "#94A3B8",  # Industrial slate badge
 
-    # Text
-    "text":        "#CDD6F4",  # Soft White
-    "muted":       "#A6ADC8",  # Soft Grey/Blue
-    "dim":         "#45475A",  # Dark grey for disabled/hints
+    # Functional Indicators
+    "success":     "#34D399",  # Mint / Emerald
+    "warning":     "#FBBF24",  # Amber
+    "danger":      "#F87171",  # Coral / Rose
+
+    # Typography
+    "text":        "#F1F5F9",  # Bright slate white
+    "muted":       "#94A3B8",  # Neutral grey
+    "dim":         "#475569",  # Dim slate
 
     # Special
-    "transparent": "#010101",  # Used for transparency key on Windows
+    "transparent": "#010101",  # Transparency key on Windows
+
+    # Log-level tints (subtle background highlight for alternating rows)
+    "row_even":    "#16181D",  # Same as surface
+    "row_odd":     "#1A1D24",  # Slightly lighter
 }
 
-FONT_FAMILY = "Segoe UI"
+# ────────────────────────────── Typography ──────────────────────────
+
+FONT_FAMILY = (
+    "Segoe UI" if sys.platform.startswith("win")
+    else "SF Pro Display" if sys.platform == "darwin"
+    else "DejaVu Sans"
+)
+
+FONT_MONO = (
+    "Cascadia Code" if sys.platform.startswith("win")
+    else "SF Mono" if sys.platform == "darwin"
+    else "DejaVu Sans Mono"
+)
 
 def make_font(size: int, weight: str = "normal"):
     return (FONT_FAMILY, size, weight)
 
+def make_mono(size: int, weight: str = "normal"):
+    return (FONT_MONO, size, weight)
 
-# ────────────────────────────── Custom Widgets ──────────────────────────────
+# ────────────────────────────── Spacing ─────────────────────────────
 
-def create_rounded_rect(canvas: tk.Canvas, x1, y1, x2, y2, radius=10, **kwargs):
-    """Draw a rounded rectangle on a Tkinter canvas."""
+SPACING = {
+    "xs": 4,
+    "sm": 8,
+    "md": 12,
+    "lg": 16,
+    "xl": 24,
+}
+
+# ────────────────────────────── Color Utilities ─────────────────────
+
+def _parse_hex(h: str) -> tuple[int, int, int]:
+    return int(h[1:3], 16), int(h[3:5], 16), int(h[5:7], 16)
+
+def lerp_color(c1: str, c2: str, t: float) -> str:
+    """Linearly interpolate between two hex colors. t=0 → c1, t=1 → c2."""
+    r1, g1, b1 = _parse_hex(c1)
+    r2, g2, b2 = _parse_hex(c2)
+    t = max(0.0, min(1.0, t))
+    r = int(r1 + (r2 - r1) * t)
+    g = int(g1 + (g2 - g1) * t)
+    b = int(b1 + (b2 - b1) * t)
+    return f"#{r:02x}{g:02x}{b:02x}"
+
+def gen_sine_pulse(c_active: str, c_bg: str, steps: int) -> list[str]:
+    """Generate smooth sine-interpolated pulse gradient between active & low states."""
+    r1, g1, b1 = _parse_hex(c_active)
+    r2, g2, b2 = _parse_hex(c_bg)
+
+    colors = []
+    for i in range(steps):
+        factor = (math.sin((i / steps) * 2 * math.pi) + 1) / 2
+        factor = 0.25 + 0.75 * factor  # Dampen bottom floor
+        nr = int(r2 + (r1 - r2) * factor)
+        ng = int(g2 + (g1 - g2) * factor)
+        nb = int(b2 + (b1 - b2) * factor)
+        colors.append(f"#{nr:02x}{ng:02x}{nb:02x}")
+    return colors
+
+
+# ────────────────────────────── Drawing Helpers ─────────────────────
+
+def create_rounded_rect(canvas, x1, y1, x2, y2, radius=10, **kwargs):
+    """Draw a smooth rounded rectangle on a Tkinter canvas."""
     points = [
         x1 + radius, y1,
         x2 - radius, y1,
@@ -60,111 +127,226 @@ def create_rounded_rect(canvas: tk.Canvas, x1, y1, x2, y2, radius=10, **kwargs):
     return canvas.create_polygon(points, smooth=True, **kwargs)
 
 
-class RoundedButton(tk.Canvas):
-    """A custom Tkinter button with actual rounded corners via Canvas."""
+# ────────────────────────────── Widget Factory Helpers ──────────────
 
-    def __init__(self, parent, text: str, bg_color: str, fg_color: str,
-                 command, radius=12, hover_color=None, padding_x=14, padding_y=6,
-                 font=None, state=tk.NORMAL, **kwargs):
-        super().__init__(parent, highlightthickness=0, bg=parent["bg"], **kwargs)
+def make_card(parent, **kwargs):
+    """Create a standard card frame with consistent styling."""
+    return ctk.CTkFrame(parent, fg_color=C["surface"], corner_radius=8, **kwargs)
 
-        self.text = text
-        self.bg_color = bg_color
-        self.fg_color = fg_color
-        self.hover_color = hover_color or self._lighten(bg_color)
-        self.command = command
-        self.radius = radius
-        self._state = state
-        self.font = font or make_font(9, "bold")
 
-        # Create elements
-        self.rect_id = None
-        self.text_id = None
+def make_card_header(parent, title: str, icon: str = ""):
+    """Build a standard card header row with optional icon and separator."""
+    header = ctk.CTkFrame(parent, fg_color=C["surface"], height=36)
+    header.pack(fill=tk.X, padx=SPACING["lg"], pady=(SPACING["sm"] + 2, 0))
 
-        # Calculate sizing
-        self._pad_x = padding_x
-        self._pad_y = padding_y
+    label_text = f"{icon}  {title}" if icon else title
+    ctk.CTkLabel(
+        header, text=label_text, text_color=C["text"],
+        fg_color=C["surface"], font=make_font(10, "bold"),
+    ).pack(side=tk.LEFT)
 
-        # Bind events
-        self.bind("<Configure>", self._on_resize)
-        self.bind("<Enter>", self._on_enter)
-        self.bind("<Leave>", self._on_leave)
-        self.bind("<Button-1>", self._on_click)
-        self.bind("<ButtonRelease-1>", self._on_release)
+    make_separator(parent)
+    return header
 
-    def _draw(self, width, height):
-        self.delete("all")
-        color = self.bg_color if self._state == tk.NORMAL else C["dim"]
-        self.rect_id = create_rounded_rect(
-            self, 2, 2, width - 2, height - 2,
-            radius=self.radius, fill=color
-        )
-        self.text_id = self.create_text(
-            width / 2, height / 2,
-            text=self.text, fill=self.fg_color,
-            font=self.font, justify=tk.CENTER
-        )
 
-    def _on_resize(self, event):
-        self._draw(event.width, event.height)
+def make_separator(parent, color: str = None):
+    """Create a subtle horizontal divider line."""
+    ctk.CTkFrame(
+        parent, fg_color=color or C["border"], height=1,
+    ).pack(fill=tk.X, pady=SPACING["sm"])
 
-    def _on_enter(self, event):
-        if self._state == tk.NORMAL and self.rect_id:
-            self.itemconfig(self.rect_id, fill=self.hover_color)
 
-    def _on_leave(self, event):
-        if self._state == tk.NORMAL and self.rect_id:
-            self.itemconfig(self.rect_id, fill=self.bg_color)
+# ────────────────────────────── ttk Dark Mode Styling ──────────────
 
-    def _on_click(self, event):
-        if self._state == tk.NORMAL and self.rect_id:
-            self.itemconfig(self.rect_id, fill=self._darken(self.bg_color))
+def style_combobox_dark(root):
+    """Apply dark-mode styling to ttk Combobox widgets."""
+    style = ttk.Style(root)
+    style.theme_use("clam")
 
-    def _on_release(self, event):
-        if self._state == tk.NORMAL:
-            # Check if mouse is still inside
-            w = self.winfo_width()
-            h = self.winfo_height()
-            if 0 <= event.x <= w and 0 <= event.y <= h:
-                self.itemconfig(self.rect_id, fill=self.hover_color)
-                if self.command:
-                    self.command()
-            else:
-                self.itemconfig(self.rect_id, fill=self.bg_color)
+    style.configure(
+        "Dark.TCombobox",
+        fieldbackground=C["panel_alt"],
+        background=C["panel_alt"],
+        foreground=C["text"],
+        bordercolor=C["border"],
+        arrowcolor=C["accent"],
+        selectbackground=C["accent_dim"],
+        selectforeground=C["text"],
+        relief="flat",
+    )
+    style.map("Dark.TCombobox",
+        fieldbackground=[("readonly", C["panel_alt"]), ("focus", C["panel_alt"])],
+        background=[("active", C["border_focus"])],
+        bordercolor=[("focus", C["accent"])],
+        foreground=[("readonly", C["text"])],
+    )
 
-    def config_state(self, state):
-        self._state = state
-        if self.rect_id:
-            color = self.bg_color if self._state == tk.NORMAL else C["dim"]
-            self.itemconfig(self.rect_id, fill=color)
+    # Style the dropdown listbox
+    try:
+        root.option_add("*TCombobox*Listbox.background", C["panel_alt"])
+        root.option_add("*TCombobox*Listbox.foreground", C["text"])
+        root.option_add("*TCombobox*Listbox.selectBackground", C["accent_dim"])
+        root.option_add("*TCombobox*Listbox.selectForeground", C["text"])
+        root.option_add("*TCombobox*Listbox.font", make_font(10))
+    except Exception:
+        pass
 
-    def config_text(self, text):
-        self.text = text
-        if self.text_id:
-            self.itemconfig(self.text_id, text=text)
+    return "Dark.TCombobox"
 
-    @staticmethod
-    def _lighten(hex_color: str, factor: float = 0.15) -> str:
-        try:
-            r = int(hex_color[1:3], 16)
-            g = int(hex_color[3:5], 16)
-            b = int(hex_color[5:7], 16)
-            r = min(255, int(r + (255 - r) * factor))
-            g = min(255, int(g + (255 - g) * factor))
-            b = min(255, int(b + (255 - b) * factor))
-            return f"#{r:02x}{g:02x}{b:02x}"
-        except:
-            return hex_color
 
-    @staticmethod
-    def _darken(hex_color: str, factor: float = 0.15) -> str:
-        try:
-            r = int(hex_color[1:3], 16)
-            g = int(hex_color[3:5], 16)
-            b = int(hex_color[5:7], 16)
-            r = max(0, int(r * (1 - factor)))
-            g = max(0, int(g * (1 - factor)))
-            b = max(0, int(b * (1 - factor)))
-            return f"#{r:02x}{g:02x}{b:02x}"
-        except:
-            return hex_color
+def style_scale_dark(root):
+    """Apply dark-mode styling to ttk Scale widgets."""
+    style = ttk.Style(root)
+    style.theme_use("clam")
+
+    style.configure(
+        "Dark.Horizontal.TScale",
+        background=C["surface"],
+        troughcolor=C["panel"],
+        sliderrelief="flat",
+        borderwidth=0,
+        sliderlength=16,
+    )
+    style.map("Dark.Horizontal.TScale",
+        background=[("active", C["surface"])],
+    )
+
+    return "Dark.Horizontal.TScale"
+
+
+# ────────────────────────────── Log Level Icons ────────────────────
+
+LOG_ICONS = {
+    "INFO": "●",
+    "OK":   "✓",
+    "WARN": "▲",
+    "ERR":  "✕",
+    "DEV":  "◆",
+}
+
+
+# ────────────────────────────── CustomTkinter Setup ──────────────────────────────
+
+try:
+    import customtkinter as ctk
+    HAS_CUSTOMTKINTER = True
+    ctk.set_appearance_mode("dark")
+    ctk.set_default_color_theme("blue")
+
+    class RoundedButton(ctk.CTkButton):
+        def __init__(self, master=None, **kwargs):
+            if "bg_color" in kwargs and "fg_color" not in kwargs:
+                kwargs["fg_color"] = kwargs.pop("bg_color")
+            kwargs.pop("padding_x", None)
+            kwargs.pop("padding_y", None)
+            if "radius" in kwargs and "corner_radius" not in kwargs:
+                kwargs["corner_radius"] = kwargs.pop("radius")
+            super().__init__(master=master, **kwargs)
+
+        def config_state(self, state):
+            self.configure(state="normal" if state in ("normal", "active") else "disabled")
+
+        def config_text(self, text):
+            self.configure(text=text)
+
+except ImportError:
+    HAS_CUSTOMTKINTER = False
+
+    class _CTkShim:
+        @staticmethod
+        def set_appearance_mode(*args, **kwargs): pass
+        @staticmethod
+        def set_default_color_theme(*args, **kwargs): pass
+
+        class CTk(tk.Tk):
+            def __init__(self, *args, **kwargs):
+                if "fg_color" in kwargs:
+                    kwargs["bg"] = kwargs.pop("fg_color")
+                super().__init__(*args, **kwargs)
+                self.configure(bg=C["bg"])
+
+            def configure(self, *args, **kwargs):
+                if "fg_color" in kwargs:
+                    kwargs["bg"] = kwargs.pop("fg_color")
+                super().configure(*args, **kwargs)
+
+        class CTkFrame(tk.Frame):
+            def __init__(self, master=None, **kwargs):
+                if "fg_color" in kwargs:
+                    kwargs["bg"] = kwargs.pop("fg_color")
+                kwargs.pop("corner_radius", None)
+                kwargs.setdefault("bg", C["surface"])
+                super().__init__(master=master, **kwargs)
+
+            def configure(self, *args, **kwargs):
+                if "fg_color" in kwargs:
+                    kwargs["bg"] = kwargs.pop("fg_color")
+                kwargs.pop("corner_radius", None)
+                super().configure(*args, **kwargs)
+
+        class CTkLabel(tk.Label):
+            def __init__(self, master=None, **kwargs):
+                if "fg_color" in kwargs:
+                    kwargs["bg"] = kwargs.pop("fg_color")
+                if "text_color" in kwargs:
+                    kwargs["fg"] = kwargs.pop("text_color")
+                kwargs.pop("corner_radius", None)
+                kwargs.setdefault("bg", getattr(master, "cget", lambda x: C["surface"])("bg") if master else C["surface"])
+                kwargs.setdefault("fg", C["text"])
+                super().__init__(master=master, **kwargs)
+
+            def configure(self, *args, **kwargs):
+                if "fg_color" in kwargs:
+                    kwargs["bg"] = kwargs.pop("fg_color")
+                if "text_color" in kwargs:
+                    kwargs["fg"] = kwargs.pop("text_color")
+                kwargs.pop("corner_radius", None)
+                super().configure(*args, **kwargs)
+
+        class CTkButton(tk.Button):
+            def __init__(self, master=None, **kwargs):
+                if "fg_color" in kwargs:
+                    kwargs["bg"] = kwargs.pop("fg_color")
+                    kwargs.setdefault("activebackground", kwargs["bg"])
+                if "text_color" in kwargs:
+                    kwargs["fg"] = kwargs.pop("text_color")
+                    kwargs.setdefault("activeforeground", kwargs["fg"])
+                kwargs.pop("hover_color", None)
+                kwargs.pop("corner_radius", None)
+                kwargs.setdefault("relief", "flat")
+                kwargs.setdefault("cursor", "hand2")
+                super().__init__(master=master, **kwargs)
+
+            def configure(self, *args, **kwargs):
+                if "fg_color" in kwargs:
+                    kwargs["bg"] = kwargs.pop("fg_color")
+                    kwargs.setdefault("activebackground", kwargs["bg"])
+                if "text_color" in kwargs:
+                    kwargs["fg"] = kwargs.pop("text_color")
+                    kwargs.setdefault("activeforeground", kwargs["fg"])
+                kwargs.pop("hover_color", None)
+                kwargs.pop("corner_radius", None)
+                super().configure(*args, **kwargs)
+
+        class CTkCheckBox(tk.Checkbutton):
+            def __init__(self, master=None, **kwargs):
+                if "fg_color" in kwargs:
+                    kwargs.pop("fg_color")
+                if "text_color" in kwargs:
+                    kwargs["fg"] = kwargs.pop("text_color")
+                kwargs.pop("hover_color", None)
+                kwargs.setdefault("bg", C["surface"])
+                kwargs.setdefault("selectcolor", C["panel"])
+                kwargs.setdefault("activebackground", C["surface"])
+                kwargs.setdefault("activeforeground", C["accent"])
+                super().__init__(master=master, **kwargs)
+
+            def configure(self, *args, **kwargs):
+                if "fg_color" in kwargs:
+                    kwargs.pop("fg_color")
+                if "text_color" in kwargs:
+                    kwargs["fg"] = kwargs.pop("text_color")
+                super().configure(*args, **kwargs)
+
+    ctk = _CTkShim()
+    RoundedButton = ctk.CTkButton

@@ -2,7 +2,7 @@
 BH-AI — User Mode UI
 A compact, floating always-on-top pill HUD.
 Pick a window → click Start. Zero complexity.
-Features a minimalist pastel theme and rounded pill shape.
+Features a minimalist graphite theme and rounded pill shape.
 """
 
 import tkinter as tk
@@ -19,8 +19,18 @@ from src.ocr import OCRProcessor
 from src.analyzer import ContextAnalyzer, Insight
 from src.voice import VoiceFeedback
 from src.overlay import OverlayWindow
+from src.privacy import PIIRedactor, WindowBlocklistMonitor, get_foreground_window_info
+from src.memory import MemoryDatabase, EmbeddingEngine, EpisodicRAGEngine
+from src.reasoning import LocalLLMDriver, LLMBackend
+from src.voice import VoiceTriggerController
 
-from src.ui_theme import C, make_font, RoundedButton, create_rounded_rect
+
+from src.ui_theme import (
+    ctk, C, SPACING, make_font, make_mono, create_rounded_rect,
+    gen_sine_pulse, lerp_color, style_combobox_dark,
+)
+
+SP = SPACING
 
 # ────────────────────────────── window enumeration ─────────────────────────
 
@@ -91,7 +101,7 @@ class UserModeUI:
     RADIUS = 20
 
     def __init__(self):
-        self.root = tk.Tk()
+        self.root = ctk.CTk()
         self.root.title("BH-AI")
         self.root.geometry(f"{self.PILL_W}x{self.PILL_H}+80+80")
         self.root.minsize(self.PILL_W, self.PILL_H)
@@ -130,10 +140,28 @@ class UserModeUI:
         self.analyzer = ContextAnalyzer()
         self.voice = VoiceFeedback()
         self.overlay = OverlayWindow(self.root)
+        # local reasoning, privacy & memory engines
+        self.pii = PIIRedactor()
+        self.db = MemoryDatabase()
+        self.embeddings = EmbeddingEngine(dimension=64)
+        self.rag = EpisodicRAGEngine(db=self.db, embeddings=self.embeddings)
+        self.llm = LocalLLMDriver(backend=LLMBackend.AUTO)
+        self.blocklist_monitor = WindowBlocklistMonitor(state_machine=self.capture.state_machine)
+        self.trigger_controller = VoiceTriggerController(
+            state_machine=self.capture.state_machine,
+            on_trigger=self._on_voice_or_ptt_trigger if hasattr(self, '_on_voice_or_ptt_trigger') else lambda x: None,
+        )
+        self._current_session_id = None
+        self._is_llm_streaming = False
+        import queue
+        self._llm_queue = queue.Queue()
 
         # ── build ──
         self._build_pill()
         self._make_draggable()
+
+        # ── Dark-mode styling for ttk widgets ──
+        self._combobox_style = style_combobox_dark(self.root)
 
         # ── kick off ──
         self._refresh_windows()
@@ -150,7 +178,8 @@ class UserModeUI:
         self._canvas = tk.Canvas(
             self.root,
             width=self.PILL_W, height=self.PILL_H,
-            bg=C["transparent"], highlightthickness=0,
+            bg=C["transparent"],
+            highlightthickness=0,
         )
         self._canvas.pack(fill=tk.BOTH, expand=True)
 
@@ -161,41 +190,42 @@ class UserModeUI:
         )
 
         # Inner container placed on canvas
-        inner = tk.Frame(self._canvas, bg=C["surface"])
+        inner = ctk.CTkFrame(self._canvas, fg_color=C["surface"])
         self._canvas.create_window(
             self.PILL_W // 2, self.PILL_H // 2,
             window=inner, width=self.PILL_W - 20, height=self.PILL_H - 16,
         )
 
         # ── left: logo ──────────────────────────────────────────────
-        logo_frame = tk.Frame(inner, bg=C["surface"])
+        logo_frame = ctk.CTkFrame(inner, fg_color=C["surface"])
         logo_frame.pack(side=tk.LEFT, padx=(6, 0))
 
-        self._dot_canvas = tk.Canvas(logo_frame, width=12, height=12,
+        self._dot_canvas = tk.Canvas(logo_frame, width=14, height=14,
                                       bg=C["surface"], highlightthickness=0)
-        self._dot_canvas.pack(side=tk.TOP, pady=(16, 2))
-        self._dot_oval = self._dot_canvas.create_oval(1, 1, 11, 11,
-                                                       fill=C["muted"], outline="")
+        self._dot_canvas.pack(side=tk.TOP, pady=(SP["lg"], 2))
+        # Glow ring + dot
+        self._dot_glow = self._dot_canvas.create_oval(0, 0, 13, 13, fill="", outline=C["dim"], width=1)
+        self._dot_oval = self._dot_canvas.create_oval(3, 3, 11, 11, fill=C["muted"], outline="")
 
-        tk.Label(logo_frame, text="BH", fg=C["accent"], bg=C["surface"],
+        ctk.CTkLabel(logo_frame, text="BH", text_color=C["accent"], fg_color=C["surface"],
                  font=make_font(10, "bold")).pack(side=tk.TOP)
 
         # ── center: window picker ───────────────────────────────────
-        center = tk.Frame(inner, bg=C["surface"])
-        center.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=12)
+        center = ctk.CTkFrame(inner, fg_color=C["surface"])
+        center.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=SP["md"])
 
-        picker_row = tk.Frame(center, bg=C["surface"])
-        picker_row.pack(fill=tk.X, pady=(12, 4))
+        picker_row = ctk.CTkFrame(center, fg_color=C["surface"])
+        picker_row.pack(fill=tk.X, pady=(SP["md"], SP["xs"]))
 
-        tk.Label(picker_row, text="Monitor window:", fg=C["muted"],
-                 bg=C["surface"], font=make_font(9)).pack(side=tk.LEFT)
+        ctk.CTkLabel(picker_row, text="Monitor window:", text_color=C["muted"],
+                 fg_color=C["surface"], font=make_font(9)).pack(side=tk.LEFT)
 
-        refresh_btn = tk.Label(picker_row, text="↻", fg=C["accent"],
-                               bg=C["surface"], font=make_font(12), cursor="hand2")
-        refresh_btn.pack(side=tk.RIGHT, padx=(4, 0))
+        refresh_btn = ctk.CTkLabel(picker_row, text="↻", text_color=C["accent"],
+                               fg_color=C["surface"], font=make_font(12), cursor="hand2")
+        refresh_btn.pack(side=tk.RIGHT, padx=(SP["xs"], 0))
         refresh_btn.bind("<Button-1>", lambda e: self._refresh_windows())
-        refresh_btn.bind("<Enter>", lambda e: refresh_btn.config(fg=C["accent_hov"]))
-        refresh_btn.bind("<Leave>", lambda e: refresh_btn.config(fg=C["accent"]))
+        refresh_btn.bind("<Enter>", lambda e: refresh_btn.configure(text_color=C["accent_hov"]))
+        refresh_btn.bind("<Leave>", lambda e: refresh_btn.configure(text_color=C["accent"]))
 
         self._window_var = tk.StringVar(value="— select a window —")
         self._window_menu = ttk.Combobox(
@@ -205,77 +235,78 @@ class UserModeUI:
             font=make_font(10),
             width=32,
         )
-        self._window_menu.pack(fill=tk.X, pady=(0, 8))
+        self._window_menu.pack(fill=tk.X, pady=(0, SP["sm"]))
         self._window_menu.bind("<<ComboboxSelected>>", self._on_window_selected)
 
         # ── right: controls + thumbnail ─────────────────────────────
-        right = tk.Frame(inner, bg=C["surface"])
-        right.pack(side=tk.RIGHT, padx=(4, 8))
+        right = ctk.CTkFrame(inner, fg_color=C["surface"])
+        right.pack(side=tk.RIGHT, padx=(SP["xs"], SP["sm"]))
 
         # Thumbnail
         self._thumb_canvas = tk.Canvas(right, width=self.THUMB_W,
                                         height=self.THUMB_H - 16,
-                                        bg=C["panel"], highlightthickness=1,
+                                        bg=C["panel"],
+                                        highlightthickness=1,
                                         highlightbackground=C["border"])
-        self._thumb_canvas.pack(side=tk.LEFT, padx=(0, 12))
+        self._thumb_canvas.pack(side=tk.LEFT, padx=(0, SP["md"]))
         self._thumb_no_text = self._thumb_canvas.create_text(
             self.THUMB_W // 2, (self.THUMB_H - 16) // 2,
             text="No preview", fill=C["muted"], font=make_font(8), justify=tk.CENTER,
         )
 
         # Control buttons + timer
-        ctrl = tk.Frame(right, bg=C["surface"])
+        ctrl = ctk.CTkFrame(right, fg_color=C["surface"])
         ctrl.pack(side=tk.LEFT)
 
-        btn_row = tk.Frame(ctrl, bg=C["surface"])
-        btn_row.pack(pady=(4, 4))
+        btn_row = ctk.CTkFrame(ctrl, fg_color=C["surface"])
+        btn_row.pack(pady=(SP["xs"], SP["xs"]))
 
-        self._btn_start = RoundedButton(
-            btn_row, text="▶", bg_color=C["success"], fg_color=C["surface"],
-            command=self._start_session, width=32, height=32, radius=16, font=make_font(11, "bold")
+        self._btn_start = ctk.CTkButton(
+            btn_row, text="▶", fg_color=C["success"], text_color=C["surface"],
+            command=self._start_session, width=32, height=32, corner_radius=16, font=make_font(11, "bold")
         )
         self._btn_start.pack(side=tk.LEFT, padx=3)
 
-        self._btn_pause = RoundedButton(
-            btn_row, text="⏸", bg_color=C["warning"], fg_color=C["surface"],
-            command=self._pause_session, state=tk.DISABLED, width=32, height=32, radius=16, font=make_font(11, "bold")
+        self._btn_pause = ctk.CTkButton(
+            btn_row, text="⏸", fg_color=C["warning"], text_color=C["surface"],
+            command=self._pause_session, state="disabled", width=32, height=32, corner_radius=16, font=make_font(11, "bold")
         )
         self._btn_pause.pack(side=tk.LEFT, padx=3)
 
-        self._btn_stop = RoundedButton(
-            btn_row, text="⏹", bg_color=C["danger"], fg_color=C["surface"],
-            command=self._stop_session, state=tk.DISABLED, width=32, height=32, radius=16, font=make_font(11, "bold")
+        self._btn_stop = ctk.CTkButton(
+            btn_row, text="⏹", fg_color=C["danger"], text_color=C["surface"],
+            command=self._stop_session, state="disabled", width=32, height=32, corner_radius=16, font=make_font(11, "bold")
         )
         self._btn_stop.pack(side=tk.LEFT, padx=3)
 
         # Settings gear
-        gear = tk.Label(btn_row, text="⚙", fg=C["muted"], bg=C["surface"],
+        gear = ctk.CTkLabel(btn_row, text="⚙", text_color=C["muted"], fg_color=C["surface"],
                         font=make_font(14), cursor="hand2")
-        gear.pack(side=tk.LEFT, padx=(8, 0))
+        gear.pack(side=tk.LEFT, padx=(SP["sm"], 0))
         gear.bind("<Button-1>", lambda e: self._open_settings())
-        gear.bind("<Enter>", lambda e: gear.config(fg=C["text"]))
-        gear.bind("<Leave>", lambda e: gear.config(fg=C["muted"]))
+        gear.bind("<Enter>", lambda e: gear.configure(text_color=C["text"]))
+        gear.bind("<Leave>", lambda e: gear.configure(text_color=C["muted"]))
 
         # Timer label & status
-        self._timer_lbl = tk.Label(ctrl, text="00:00:00",
-                                    fg=C["muted"], bg=C["surface"],
+        self._timer_lbl = ctk.CTkLabel(ctrl, text="00:00:00",
+                                    text_color=C["muted"], fg_color=C["surface"],
                                     font=make_font(10, "bold"))
         self._timer_lbl.pack()
 
-        self._status_lbl = tk.Label(ctrl, text="Select a window",
-                                     fg=C["dim"], bg=C["surface"],
+        self._status_lbl = ctk.CTkLabel(ctrl, text="Select a window",
+                                     text_color=C["dim"], fg_color=C["surface"],
                                      font=make_font(8))
         self._status_lbl.pack()
 
         # ── close button (top-right corner on canvas) ────────────────
-        close_btn = tk.Label(
-            self._canvas, text="✕", fg=C["muted"],
-            bg=C["surface"], font=make_font(10, "bold"), cursor="hand2",
+        close_btn = ctk.CTkLabel(
+            self._canvas, text="✕", text_color=C["muted"],
+            fg_color=C["surface"], font=make_font(10, "bold"), cursor="hand2",
         )
         close_btn.place(x=self.PILL_W - 24, y=8)
         close_btn.bind("<Button-1>", lambda e: self._on_close())
-        close_btn.bind("<Enter>", lambda e: close_btn.config(fg=C["danger"]))
-        close_btn.bind("<Leave>", lambda e: close_btn.config(fg=C["muted"]))
+        close_btn.bind("<Enter>", lambda e: close_btn.configure(text_color=C["danger"]))
+        close_btn.bind("<Leave>", lambda e: close_btn.configure(text_color=C["muted"]))
 
     # ═══════════════════════════════════════════════════════════════════
     #   Draggable window
@@ -328,6 +359,11 @@ class UserModeUI:
         titles = [w["title"][:55] + ("…" if len(w["title"]) > 55 else "")
                   for w in self._windows]
         self._window_menu["values"] = titles if titles else ["(no windows found)"]
+
+        # Apply dark styling to combobox after values are set
+        if hasattr(self, '_combobox_style'):
+            self._window_menu.configure(style=self._combobox_style)
+
         if not self._selected_window:
             self._window_var.set("— select a window —")
 
@@ -373,6 +409,12 @@ class UserModeUI:
         self._frame_count = 0
         self._session_start = time.time()
 
+        # Create a memory session for DB storage
+        try:
+            self._current_session_id = self.db.create_session()
+        except Exception:
+            self._current_session_id = None
+
         self.capture.set_callback(self._on_frame)
         self.capture.fps = self._fps_var.get()
         self.capture.start()
@@ -414,7 +456,7 @@ class UserModeUI:
         self._set_state("idle")
         self._update_btns(running=False, paused=False)
         self._set_status("Stopped — pick a window")
-        self._timer_lbl.config(text="00:00:00", fg=C["muted"])
+        self._timer_lbl.configure(text="00:00:00", text_color=C["muted"])
 
         # Clear thumbnail
         self._thumb_canvas.delete("all")
@@ -425,24 +467,24 @@ class UserModeUI:
 
     def _update_btns(self, running: bool, paused: bool):
         if not running:
-            self._btn_start.config_state(tk.NORMAL)
-            self._btn_pause.config_state(tk.DISABLED)
-            self._btn_stop.config_state(tk.DISABLED)
+            self._btn_start.configure(state="normal")
+            self._btn_pause.configure(state="disabled")
+            self._btn_stop.configure(state="disabled")
         elif paused:
-            self._btn_start.config_state(tk.NORMAL)
-            self._btn_pause.config_state(tk.NORMAL)
-            self._btn_stop.config_state(tk.NORMAL)
+            self._btn_start.configure(state="normal")
+            self._btn_pause.configure(state="normal")
+            self._btn_stop.configure(state="normal")
         else:
-            self._btn_start.config_state(tk.DISABLED)
-            self._btn_pause.config_state(tk.NORMAL)
-            self._btn_stop.config_state(tk.NORMAL)
+            self._btn_start.configure(state="disabled")
+            self._btn_pause.configure(state="normal")
+            self._btn_stop.configure(state="normal")
 
     def _set_state(self, state: str):
         self._state = state
         self._canvas.itemconfig(self._pill_bg, outline=STATE_COLORS.get(state, STATE_COLORS["idle"]))
 
     def _set_status(self, msg: str):
-        self._status_lbl.config(text=msg)
+        self._status_lbl.configure(text=msg)
 
     # ═══════════════════════════════════════════════════════════════════
     #   Settings popup
@@ -470,45 +512,42 @@ class UserModeUI:
         set_canvas.pack(fill=tk.BOTH, expand=True)
         create_rounded_rect(set_canvas, 1, 1, 239, 179, radius=12, fill=C["surface"], outline=C["border"])
         
-        inner = tk.Frame(set_canvas, bg=C["surface"])
+        inner = ctk.CTkFrame(set_canvas, fg_color=C["surface"])
         set_canvas.create_window(120, 90, window=inner, width=230, height=170)
 
         # Header
-        hdr = tk.Frame(inner, bg=C["surface"])
+        hdr = ctk.CTkFrame(inner, fg_color=C["surface"])
         hdr.pack(fill=tk.X)
-        tk.Label(hdr, text="⚙  Settings", fg=C["accent"],
-                 bg=C["surface"], font=make_font(11, "bold"),
-                 anchor="w", padx=12, pady=10).pack(side=tk.LEFT)
-        close_set = tk.Label(hdr, text="✕", fg=C["muted"], bg=C["surface"], font=make_font(10), cursor="hand2")
-        close_set.pack(side=tk.RIGHT, padx=12, pady=10)
+        ctk.CTkLabel(hdr, text="⚙  Settings", text_color=C["accent"],
+                 fg_color=C["surface"], font=make_font(11, "bold"),
+                 anchor="w", padx=SP["md"], pady=SP["sm"] + 2).pack(side=tk.LEFT)
+        close_set = ctk.CTkLabel(hdr, text="✕", text_color=C["muted"], fg_color=C["surface"], font=make_font(10), cursor="hand2")
+        close_set.pack(side=tk.RIGHT, padx=SP["md"], pady=SP["sm"] + 2)
         close_set.bind("<Button-1>", lambda e: win.destroy())
-        close_set.bind("<Enter>", lambda e: close_set.config(fg=C["danger"]))
-        close_set.bind("<Leave>", lambda e: close_set.config(fg=C["muted"]))
+        close_set.bind("<Enter>", lambda e: close_set.configure(text_color=C["danger"]))
+        close_set.bind("<Leave>", lambda e: close_set.configure(text_color=C["muted"]))
         
-        tk.Frame(inner, bg=C["border"], height=1).pack(fill=tk.X)
+        ctk.CTkFrame(inner, fg_color=C["border"], height=1).pack(fill=tk.X)
 
-        body = tk.Frame(inner, bg=C["surface"], padx=16, pady=14)
+        body = ctk.CTkFrame(inner, fg_color=C["surface"])
         body.pack(fill=tk.BOTH, expand=True)
 
         # Voice toggle
-        tk.Checkbutton(
+        ctk.CTkCheckBox(
             body, text="Voice feedback",
             variable=self._voice_enabled,
-            fg=C["text"], bg=C["surface"],
-            selectcolor=C["panel"],
-            activebackground=C["surface"],
-            activeforeground=C["accent"],
+            text_color=C["text"], fg_color=C["accent"],
             font=make_font(10),
             command=lambda: self.voice.set_enabled(self._voice_enabled.get()),
-        ).pack(anchor="w", pady=4)
+        ).pack(anchor="w", pady=SP["xs"])
 
         # FPS slider
-        fps_row = tk.Frame(body, bg=C["surface"])
-        fps_row.pack(fill=tk.X, pady=(8, 0))
-        tk.Label(fps_row, text="Capture FPS:", fg=C["muted"],
-                 bg=C["surface"], font=make_font(9)).pack(side=tk.LEFT)
-        self._settings_fps_lbl = tk.Label(fps_row, text=f"{self._fps_var.get():.1f}",
-                                           fg=C["accent"], bg=C["surface"],
+        fps_row = ctk.CTkFrame(body, fg_color=C["surface"])
+        fps_row.pack(fill=tk.X, pady=(SP["sm"], 0))
+        ctk.CTkLabel(fps_row, text="Capture FPS:", text_color=C["muted"],
+                 fg_color=C["surface"], font=make_font(9)).pack(side=tk.LEFT)
+        self._settings_fps_lbl = ctk.CTkLabel(fps_row, text=f"{self._fps_var.get():.1f}",
+                                           text_color=C["accent"], fg_color=C["surface"],
                                            font=make_font(10, "bold"))
         self._settings_fps_lbl.pack(side=tk.RIGHT)
 
@@ -516,33 +555,52 @@ class UserModeUI:
             fps = round(float(v), 1)
             self._fps_var.set(fps)
             self.capture.fps = fps
-            self._settings_fps_lbl.config(text=f"{fps:.1f}")
+            self._settings_fps_lbl.configure(text=f"{fps:.1f}")
 
         ttk.Style().configure("Horizontal.TScale",
                               background=C["surface"], troughcolor=C["panel"])
         ttk.Scale(body, from_=0.2, to=5.0, orient=tk.HORIZONTAL,
                   variable=self._fps_var, length=200,
-                  command=_fps_upd).pack(fill=tk.X, pady=(4, 0))
+                  command=_fps_upd).pack(fill=tk.X, pady=(SP["xs"], 0))
 
         # Refresh windows button
-        tk.Button(
+        ctk.CTkButton(
             body, text="↻  Refresh window list",
-            fg=C["text"], bg=C["panel"],
-            activeforeground=C["accent"],
-            activebackground=C["panel"],
-            relief="flat", cursor="hand2",
+            text_color=C["text"], fg_color=C["panel"],
+            hover_color=C["border"],
             font=make_font(9),
             command=self._refresh_windows,
-        ).pack(fill=tk.X, pady=(16, 0))
+        ).pack(fill=tk.X, pady=(SP["lg"], 0))
 
     # ═══════════════════════════════════════════════════════════════════
     #   Frame processing
     # ═══════════════════════════════════════════════════════════════════
 
     def _on_frame(self, image: Image.Image):
-        text = self.ocr.extract_text(image)
-        insights = self.analyzer.analyze(text)
-        self.root.after(0, lambda: self._update_ui(image, text, insights))
+        """Process frame with full privacy pipeline (extract_boxes + PII redaction)."""
+        boxes = self.ocr.extract_boxes(image)
+        raw_text = " ".join([b.text for b in boxes if b.text.strip()]) if boxes else ""
+
+        pii_res = self.pii.redact_text(raw_text)
+        redacted_text = pii_res.redacted_text
+
+        # Store in memory DB if session active
+        if self._session_active and self._current_session_id and redacted_text:
+            try:
+                title, app = get_foreground_window_info()
+                self.db.add_record(
+                    session_id=self._current_session_id,
+                    redacted_text=redacted_text,
+                    app_name=app or "Desktop",
+                    window_title=title or "Active Window",
+                    is_active=True,
+                    token_count=max(len(redacted_text.split()), 1),
+                )
+            except Exception:
+                pass
+
+        insights = self.analyzer.analyze(redacted_text)
+        self.root.after(0, lambda: self._update_ui(image, redacted_text, insights))
 
     def _update_ui(self, image: Image.Image, text: str, insights: list[Insight]):
         self._frame_count += 1
@@ -586,18 +644,28 @@ class UserModeUI:
             h = elapsed // 3600
             m = (elapsed % 3600) // 60
             s = elapsed % 60
-            self._timer_lbl.config(
+            self._timer_lbl.configure(
                 text=f"{h:02d}:{m:02d}:{s:02d}",
-                fg=C["success"],
+                text_color=C["success"],
             )
 
         table = self._pulse_tables.get(self._state, self._pulse_tables["idle"])
         color = table[self._pulse_step % len(table)]
         self._dot_canvas.itemconfig(self._dot_oval, fill=color)
+        # Animate glow ring
         if self._state != "idle":
+            glow_t = 0.1 + 0.3 * ((self._pulse_step % PULSE_STEPS) / PULSE_STEPS)
+            glow_color = lerp_color(C["surface"], STATE_COLORS.get(self._state, C["dim"]), glow_t)
+            self._dot_canvas.itemconfig(self._dot_glow, outline=glow_color)
             self._pulse_step += 1
+        else:
+            self._dot_canvas.itemconfig(self._dot_glow, outline=C["dim"])
 
-        self.root.after(80, self._tick)
+        try:
+            if self.root.winfo_exists():
+                self.root.after(80, self._tick)
+        except Exception:
+            pass
 
     # ═══════════════════════════════════════════════════════════════════
     #   Cleanup
@@ -607,7 +675,105 @@ class UserModeUI:
         self.capture.stop()
         self.voice.stop()
         self.overlay.hide()
+        # Clean up background monitors
+        try:
+            self.blocklist_monitor.stop()
+        except Exception:
+            pass
+        try:
+            self.trigger_controller.stop()
+        except Exception:
+            pass
+        try:
+            self.db.close()
+        except Exception:
+            pass
         self.root.destroy()
 
     def run(self):
         self.root.mainloop()
+
+
+    def _on_dfa_state_changed(self, source, target, trigger, payload=None):
+        try:
+            self.root.after(0, lambda: self._apply_dfa_state(source, target, trigger, payload))
+        except Exception:
+            pass
+            
+    def _apply_dfa_state(self, source, target, trigger, payload=None):
+        from src.state_machine import State, Trigger
+        
+        if target == State.ACTIVE:
+            self._session_active = True
+            self._paused = False
+            self.overlay.show()
+            self.overlay.set_state_badge(State.ACTIVE)
+            self._set_state("active")
+            if hasattr(self, "_update_btns"): self._update_btns(running=True, paused=False)
+            self._set_status("Session active")
+            
+        elif target == State.PAUSED:
+            self._paused = True
+            if hasattr(self, "_update_btns"): self._update_btns(running=True, paused=True)
+            self.overlay.hide()
+            if trigger == Trigger.BLOCK_MATCH:
+                app_info = ""
+                if isinstance(payload, dict):
+                    app_info = f" ({payload.get('window') or payload.get('app')})"
+                self._set_state("paused")
+                self._set_status(f"Auto-paused (Privacy){app_info}")
+                
+        elif target == State.DORMANT:
+            self._session_active = False
+            self._paused = False
+            if hasattr(self, "_update_btns"): self._update_btns(running=False, paused=False)
+            self.overlay.clear()
+            self.overlay.hide()
+            self._set_state("idle")
+            if trigger == Trigger.TIMEOUT:
+                self._set_status("Auto-stopped (Idle timeout)")
+            else:
+                self._set_status("Session stopped")
+
+    def _drain_llm_queue(self):
+        try:
+            while True:
+                msg_type, content = self._llm_queue.get_nowait()
+                if msg_type == "clear":
+                    self.overlay.clear_llm_response()
+                elif msg_type == "chunk":
+                    self.overlay.append_llm_chunk(content)
+                elif msg_type == "done":
+                    self._is_llm_streaming = False
+                    return
+        except Exception:
+            pass
+        if self._is_llm_streaming:
+            self.root.after(50, self._drain_llm_queue)
+
+    def _handle_voice_trigger(self, trigger_source: str):
+        if self._is_llm_streaming:
+            return
+
+        self._set_status("AI Thinking")
+        self._is_llm_streaming = True
+        query = "What am I currently looking at or working on?"
+
+        self.overlay.show()
+        self.overlay.show_llm_response(text="Analyzing screen context with local RAG", header="BH-AI User Assistant")
+
+        def _worker():
+            try:
+                full_text = ""
+                self._llm_queue.put(("clear", ""))
+                for chunk in self.llm.stream_with_rag(query, self.rag, session_id=self._current_session_id):
+                    full_text += chunk
+                    self._llm_queue.put(("chunk", chunk))
+                self._llm_queue.put(("done", full_text))
+            except Exception as exc:
+                self._llm_queue.put(("chunk", f"\n\n[Error: {exc}]"))
+                self._llm_queue.put(("done", ""))
+
+        import threading
+        threading.Thread(target=_worker, daemon=True).start()
+        self.root.after(50, self._drain_llm_queue)

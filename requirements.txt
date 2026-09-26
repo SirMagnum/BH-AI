@@ -3,3 +3,4 @@ Pillow==10.4.0
 pytesseract==0.3.13
 pyttsx3==2.98
 pywin32==307
+customtkinter>=5.2.0

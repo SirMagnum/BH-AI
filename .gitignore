@@ -178,3 +178,35 @@ Thumbs.db
 [dD]esktop.ini
 $RECYCLE.BIN/
 
+# Project roadmap & planning
+plan.md
+
+# Local runtime data & SQLite databases
+data/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# Local model weights, embeddings & checkpoints
+models/
+*.onnx
+*.bin
+*.pt
+*.pth
+*.tflite
+*.gguf
+
+# Audio dumps & temporary recordings
+temp_audio/
+*.wav
+*.mp3
+
+# Scratch / debug dump files
+dump_*.txt
+err.txt
+*.dump
+
+
